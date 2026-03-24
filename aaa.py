@@ -8,7 +8,7 @@ st.set_page_config(page_title="Gestor de Sobre-Stock", layout="wide")
 st.title("🍷 Monitor de Sobre-Stock e Inventario Inmovilizado")
 st.write("Sube los reportes semanales completos en Excel para detectar oportunidades de movimiento de inventario.")
 
-# ZONAS DE CARGA
+# --- ZONAS DE CARGA ---
 col1, col2 = st.columns(2)
 with col1:
     archivo_anterior = st.file_uploader("Sube el Excel de la semana ANTERIOR", type=['csv', 'xlsx', 'xls'])
@@ -37,6 +37,7 @@ def formato_moneda(valor):
     return f"${valor:,.0f}".replace(",", ".")
 
 
+# --- PROCESAMIENTO CENTRAL ---
 if archivo_anterior and archivo_actual:
     try:
         df_ant = leer_archivo(archivo_anterior)
@@ -54,7 +55,6 @@ if archivo_anterior and archivo_actual:
         df_cruce['Variacion_Unidades'] = df_cruce['Libre utilización_Act'] - df_cruce['Libre utilización_Ant']
         df_cruce['Variacion_Valor'] = df_cruce['Valor libre util._Act'] - df_cruce['Valor libre util._Ant']
 
-        # CREAMOS UNA ETIQUETA ÚNICA PARA EVITAR NÚMEROS SUPERPUESTOS EN LOS GRÁFICOS
         df_cruce['LOTE'] = df_cruce['LOTE'].astype(str)
         df_cruce['Nombre_Grafico'] = df_cruce['Texto breve de material'] + " (Lote: " + df_cruce['LOTE'] + ")"
 
@@ -64,12 +64,13 @@ if archivo_anterior and archivo_actual:
         if not df_cruce.empty:
             st.divider()
 
-            # --- NUEVO DISEÑO EN PESTAÑAS ---
-            tab1, tab2 = st.tabs(["📊 Dashboard Visual", "📋 Tabla de Datos y Descargas"])
+            # --- PESTAÑAS DE NAVEGACIÓN ---
+            tab1, tab2 = st.tabs(["📊 Dashboard Visual", "🔍 Tabla Dinámica y Descargas"])
 
             with tab1:
                 st.header("Dashboard Ejecutivo de Inventario")
-                st.info("💡 **Tip para PDF:** Presiona `Ctrl + P` y selecciona 'Guardar como PDF'.")
+                st.info(
+                    "💡 **Tip para PDF:** Presiona `Ctrl + P` y selecciona 'Guardar como PDF' para imprimir esta pantalla.")
 
                 total_aumentos = len(sobre_stock[sobre_stock['Variacion_Unidades'] > 0])
                 unidades_nuevas = int(sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Unidades'].sum())
@@ -92,10 +93,8 @@ if archivo_anterior and archivo_actual:
                     if not top_aumentos.empty:
                         top_aumentos['Texto_Etiqueta'] = top_aumentos['Variacion_Unidades'].apply(
                             lambda x: f"+{int(x):,}".replace(',', '.'))
-
                         bars = alt.Chart(top_aumentos).mark_bar(color='#E15A97').encode(
                             x=alt.X('Variacion_Unidades:Q', title='Unidades Aumentadas'),
-                            # AHORA USAMOS LA ETIQUETA ÚNICA (NOMBRE + LOTE)
                             y=alt.Y('Nombre_Grafico:N', sort='-x', title='', axis=alt.Axis(labelLimit=800)),
                             tooltip=[alt.Tooltip('Texto breve de material:N', title='Material'),
                                      alt.Tooltip('LOTE:N', title='Lote'),
@@ -113,10 +112,8 @@ if archivo_anterior and archivo_actual:
                     if not top_volumen.empty:
                         top_volumen['Texto_Etiqueta'] = top_volumen['Libre utilización_Act'].apply(
                             lambda x: f"{int(x):,}".replace(',', '.'))
-
                         bars_vol = alt.Chart(top_volumen).mark_bar(color='#4A90E2').encode(
                             x=alt.X('Libre utilización_Act:Q', title='Stock Total Actual'),
-                            # AHORA USAMOS LA ETIQUETA ÚNICA (NOMBRE + LOTE)
                             y=alt.Y('Nombre_Grafico:N', sort='-x', title='', axis=alt.Axis(labelLimit=800)),
                             tooltip=[alt.Tooltip('Texto breve de material:N', title='Material'),
                                      alt.Tooltip('LOTE:N', title='Lote'),
@@ -129,6 +126,7 @@ if archivo_anterior and archivo_actual:
 
             with tab2:
                 st.subheader("📋 Detalle y Plan de Acción")
+
                 if not sobre_stock.empty:
                     sobre_stock = sobre_stock.sort_values(by='Libre utilización_Act', ascending=False)
 
@@ -139,38 +137,74 @@ if archivo_anterior and archivo_actual:
                         elif row['Variacion_Unidades'] > 0:
                             return "🟡 Aumento de stock. Vigilar rotación."
                         elif row['Libre utilización_Act'] > 5000:
-                            return "Inmovilizado Alto: Evaluar Venta Ecommerce."
+                            return "🔵 Inmovilizado Alto: Evaluar Venta Ecommerce."
                         elif row['Libre utilización_Act'] > 1000:
-                            return "Inmovilizado Medio: Sugerir Solicitudes Turismo."
+                            return "🟢 Inmovilizado Medio: Sugerir Solicitudes Turismo."
                         else:
-                            return "Inmovilizado Bajo: Armar packs promocionales."
+                            return "⚪ Inmovilizado Bajo: Armar packs promocionales."
 
 
                     sobre_stock['Recomendación'] = sobre_stock.apply(generar_recomendacion, axis=1)
+
+                    # --- NUEVA SECCIÓN DE FILTROS INTERACTIVOS ---
+                    st.write("**Filtros de Búsqueda**")
+                    f1, f2 = st.columns(2)
+
+                    with f1:
+                        # Buscador de texto libre
+                        busqueda = st.text_input(
+                            "🔍 Buscar por Código, Nombre o Lote (Ej: CASA REAL, CV2162, o B41803):")
+
+                    with f2:
+                        # Selector múltiple de prioridades
+                        opciones_alerta = sobre_stock['Recomendación'].unique()
+                        filtro_alerta = st.multiselect("⚙️ Filtrar por tipo de Recomendación:", options=opciones_alerta,
+                                                       default=[])
+
+                    # Aplicar filtros a los datos
+                    df_filtrado = sobre_stock.copy()
+
+                    if busqueda:
+                        busqueda = busqueda.lower()
+                        # Busca coincidencias en Material, Texto o Lote
+                        mask = df_filtrado['Texto breve de material'].str.lower().str.contains(busqueda, na=False) | \
+                               df_filtrado['Material'].str.lower().str.contains(busqueda, na=False) | \
+                               df_filtrado['LOTE'].str.lower().str.contains(busqueda, na=False)
+                        df_filtrado = df_filtrado[mask]
+
+                    if filtro_alerta:
+                        df_filtrado = df_filtrado[df_filtrado['Recomendación'].isin(filtro_alerta)]
+
+                    st.write(f"Mostrando {len(df_filtrado)} registros:")
+
                     columnas_mostrar = ['Material', 'LOTE', 'Texto breve de material', 'Libre utilización_Act',
                                         'Variacion_Unidades', 'Valor libre util._Act', 'Recomendación']
 
-                    # CONFIGURACIÓN DE COLUMNAS PARA QUE SE VEAN COMO DINERO EN LA WEB
+                    # Renderizar tabla con los datos filtrados
                     st.dataframe(
-                        sobre_stock[columnas_mostrar],
+                        df_filtrado[columnas_mostrar],
                         use_container_width=True,
                         column_config={
                             "Valor libre util._Act": st.column_config.NumberColumn("Valor Actual ($)", format="$ %d"),
                             "Libre utilización_Act": st.column_config.NumberColumn("Stock Actual", format="%d"),
-                            "Variacion_Unidades": st.column_config.NumberColumn("Variación (Unidades)", format="%d")
+                            "Variacion_Unidades": st.column_config.NumberColumn("Variación (Unid.)", format="%d")
                         }
                     )
 
+                    # --- DESCARGA EXCEL CON DATOS FILTRADOS ---
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        sobre_stock[columnas_mostrar].to_excel(writer, index=False, sheet_name='Plan de Acción')
+                        # Descarga lo que sea que esté viendo el usuario tras filtrar
+                        df_filtrado[columnas_mostrar].to_excel(writer, index=False,
+                                                               sheet_name='Plan de Acción Filtrado')
+                        # Descarga el inventario histórico completo siempre en la hoja 2
                         df_cruce.sort_values(by='Libre utilización_Act', ascending=False).to_excel(writer, index=False,
-                                                                                                   sheet_name='Inventario Total')
+                                                                                                   sheet_name='Inventario Total Histórico')
 
                     st.download_button(
-                        label="📥 Descargar Reporte Completo (Excel .xlsx)",
+                        label="📥 Descargar Tabla Actual (Excel .xlsx)",
                         data=output.getvalue(),
-                        file_name="Reporte_Inventario_Financiero.xlsx",
+                        file_name="Reporte_Inventario_Filtrado.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
                 else:
