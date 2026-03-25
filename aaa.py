@@ -93,24 +93,21 @@ if archivo_anterior and archivo_actual:
         df_cruce['Nombre_Grafico'] = df_cruce['Texto breve de material'] + " (Lote: " + df_cruce['LOTE'] + ")"
 
         # --- CÁLCULOS ESPECIALES DEL CLIENTE ---
-        # 1. Máscara general para excluir el almacén FALSO
         mascara_almacen = df_cruce['Almacén_Act'].astype(str).str.strip().str.upper() != 'FALSO'
-
-        # 2. Total de unidades "No Vigentes" (excluyendo Falso)
         mascara_estatus = df_cruce['Estatus_Act'].astype(str).str.strip().str.upper() == 'NO VIGENTE'
+
+        # 1. Total de unidades "No Vigentes" (excluyendo Falso)
         total_no_vigente = int(df_cruce[mascara_estatus & mascara_almacen]['Libre utilización_Act'].sum())
 
-        # 3. NUEVO: Suma de Valor Libre Utilización total (excluyendo Falso)
-        valor_total_bodega = df_cruce[mascara_almacen]['Valor libre util._Act'].sum()
+        # 2. CORREGIDO: Suma de Valor Libre Utilización SOLO de "No Vigentes" (excluyendo Falso)
+        valor_no_vigente = df_cruce[mascara_estatus & mascara_almacen]['Valor libre util._Act'].sum()
 
-        # Filtro de sobre-stock general
         sobre_stock = df_cruce[(df_cruce['Variacion_Unidades'] > 0) | (
                     (df_cruce['Variacion_Unidades'] == 0) & (df_cruce['Libre utilización_Act'] > 500))].copy()
 
         if not df_cruce.empty:
             st.divider()
 
-            # --- PESTAÑAS PRINCIPALES ---
             tab1, tab2, tab3 = st.tabs(["📊 Dashboard Visual", "🔍 Reportes y Descargas", "☁️ Trazabilidad Histórica"])
 
             with tab1:
@@ -121,13 +118,13 @@ if archivo_anterior and archivo_actual:
                 unidades_nuevas = int(sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Unidades'].sum())
                 valor_nuevo_ingresado = sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Valor'].sum()
 
-                # REORGANIZADO EN 5 COLUMNAS PARA INCLUIR LA NUEVA MÉTRICA
                 m1, m2, m3, m4, m5 = st.columns(5)
                 m1.metric("🔴 Mat. con Aumento", len(sobre_stock[sobre_stock['Variacion_Unidades'] > 0]))
                 m2.metric("📦 Unid. Ingresadas", f"{unidades_nuevas:,}".replace(",", "."))
                 m3.metric("💰 Capital Retenido", formato_moneda(valor_nuevo_ingresado))
                 m4.metric("⚠️ Unid. 'No Vigentes'", f"{total_no_vigente:,}".replace(",", "."))
-                m5.metric("🏦 Capital Total Bodega", formato_moneda(valor_total_bodega))
+                # LA MÉTRICA ACTUALIZADA:
+                m5.metric("🏦 Capital 'No Vigente'", formato_moneda(valor_no_vigente))
                 st.write("---")
 
                 grafico_izq, grafico_der = st.columns(2)
@@ -280,7 +277,6 @@ if archivo_anterior and archivo_actual:
                         if guardar:
                             with st.spinner("Conectando con Google Sheets..."):
                                 try:
-                                    # ttl=0 OBLIGA A LEER EN VIVO Y SALTAR LA CACHÉ
                                     df_hist = conn.read(worksheet="Historial", usecols=list(range(6)), ttl=0)
                                     df_hist = df_hist.dropna(how="all")
                                 except Exception:
@@ -307,7 +303,6 @@ if archivo_anterior and archivo_actual:
                     if st.button("🔄 Cargar Gráficos Históricos"):
                         with st.spinner("Descargando historial desde Google..."):
                             try:
-                                # ttl=0 OBLIGA A LEER EN VIVO Y SALTAR LA CACHÉ
                                 df_hist_cloud = conn.read(worksheet="Historial", usecols=list(range(6)), ttl=0).dropna(
                                     how="all")
                                 if not df_hist_cloud.empty:
