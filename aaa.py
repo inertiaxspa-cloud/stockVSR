@@ -55,6 +55,23 @@ if archivo_anterior and archivo_actual:
         df_ant.columns = df_ant.columns.str.strip()
         df_act.columns = df_act.columns.str.strip()
 
+        # --- CÁLCULOS EXACTOS DEL CLIENTE (Directo del archivo actual para evitar duplicidades del cruce) ---
+        # 1. Limpiamos y aseguramos que los números sean números
+        df_act['Almacén'] = df_act['Almacén'].fillna('')
+        df_act['Estatus'] = df_act['Estatus'].fillna('')
+        df_act['Libre utilización'] = pd.to_numeric(df_act['Libre utilización'], errors='coerce').fillna(0)
+        df_act['Valor libre util.'] = pd.to_numeric(df_act['Valor libre util.'], errors='coerce').fillna(0)
+
+        # 2. Máscara ultra-segura para descartar falsos, errores y vacíos
+        excluir_almacenes = ['FALSO', 'FALSE', '0', 'NAN', '', '#N/A']
+        m_almacen_act = ~df_act['Almacén'].astype(str).str.strip().str.upper().isin(excluir_almacenes)
+        m_estatus_act = df_act['Estatus'].astype(str).str.strip().str.upper() == 'NO VIGENTE'
+
+        # 3. Cálculo puro para el Dashboard
+        total_no_vigente = int(df_act[m_estatus_act & m_almacen_act]['Libre utilización'].sum())
+        valor_no_vigente = df_act[m_estatus_act & m_almacen_act]['Valor libre util.'].sum()
+
+        # --- PREPARACIÓN DEL CRUCE (Para la tabla de aumentos y descargas) ---
         columnas_clave = ['Material', 'LOTE', 'Texto breve de material', 'Libre utilización', 'Valor libre util.',
                           'Almacén', 'Estatus']
         for col in columnas_clave:
@@ -92,16 +109,6 @@ if archivo_anterior and archivo_actual:
         df_cruce['LOTE'] = df_cruce['LOTE'].astype(str)
         df_cruce['Nombre_Grafico'] = df_cruce['Texto breve de material'] + " (Lote: " + df_cruce['LOTE'] + ")"
 
-        # --- CÁLCULOS ESPECIALES DEL CLIENTE ---
-        mascara_almacen = df_cruce['Almacén_Act'].astype(str).str.strip().str.upper() != 'FALSO'
-        mascara_estatus = df_cruce['Estatus_Act'].astype(str).str.strip().str.upper() == 'NO VIGENTE'
-
-        # 1. Total de unidades "No Vigentes" (excluyendo Falso)
-        total_no_vigente = int(df_cruce[mascara_estatus & mascara_almacen]['Libre utilización_Act'].sum())
-
-        # 2. CORREGIDO: Suma de Valor Libre Utilización SOLO de "No Vigentes" (excluyendo Falso)
-        valor_no_vigente = df_cruce[mascara_estatus & mascara_almacen]['Valor libre util._Act'].sum()
-
         sobre_stock = df_cruce[(df_cruce['Variacion_Unidades'] > 0) | (
                     (df_cruce['Variacion_Unidades'] == 0) & (df_cruce['Libre utilización_Act'] > 500))].copy()
 
@@ -123,7 +130,6 @@ if archivo_anterior and archivo_actual:
                 m2.metric("📦 Unid. Ingresadas", f"{unidades_nuevas:,}".replace(",", "."))
                 m3.metric("💰 Capital Retenido", formato_moneda(valor_nuevo_ingresado))
                 m4.metric("⚠️ Unid. 'No Vigentes'", f"{total_no_vigente:,}".replace(",", "."))
-                # LA MÉTRICA ACTUALIZADA:
                 m5.metric("🏦 Capital 'No Vigente'", formato_moneda(valor_no_vigente))
                 st.write("---")
 
