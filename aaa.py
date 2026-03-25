@@ -43,15 +43,13 @@ if archivo_anterior and archivo_actual:
         df_ant = leer_archivo(archivo_anterior)
         df_act = leer_archivo(archivo_actual)
 
-        # Limpiar nombres de columnas (quitar espacios en blanco)
+        # Limpiar nombres de columnas
         df_ant.columns = df_ant.columns.str.strip()
         df_act.columns = df_act.columns.str.strip()
 
-        # NUEVAS COLUMNAS AGREGADAS: Almacén y Estatus
+        # Validar columnas clave
         columnas_clave = ['Material', 'LOTE', 'Texto breve de material', 'Libre utilización', 'Valor libre util.',
                           'Almacén', 'Estatus']
-
-        # Validar que existan para no romper el código
         for col in columnas_clave:
             if col not in df_ant.columns: df_ant[col] = ''
             if col not in df_act.columns: df_act[col] = ''
@@ -65,6 +63,16 @@ if archivo_anterior and archivo_actual:
         df_cruce['Variacion_Valor'] = df_cruce['Valor libre util._Act'] - df_cruce['Valor libre util._Ant']
 
 
+        # --- NUEVO REQUERIMIENTO: ESTADO DEL MATERIAL (NUEVO O YA ESTABA) ---
+        def determinar_estado(row):
+            if row['Libre utilización_Ant'] == 0 and row['Libre utilización_Act'] > 0:
+                return "Material Nuevo"
+            return "Ya Estaba"
+
+
+        df_cruce['Estado Material'] = df_cruce.apply(determinar_estado, axis=1)
+
+
         # CÁLCULO DE % DE AUMENTO
         def calcular_porcentaje(row):
             ant = row['Libre utilización_Ant']
@@ -72,7 +80,7 @@ if archivo_anterior and archivo_actual:
             if var <= 0:
                 return "0%"
             if ant == 0 and var > 0:
-                return "Nuevo Ingreso (100%)"
+                return "100%"  # Ya indicamos que es nuevo en la otra columna
             else:
                 pct = (var / ant) * 100
                 return f"{pct:.1f}%"
@@ -84,11 +92,9 @@ if archivo_anterior and archivo_actual:
         df_cruce['LOTE'] = df_cruce['LOTE'].astype(str)
         df_cruce['Nombre_Grafico'] = df_cruce['Texto breve de material'] + " (Lote: " + df_cruce['LOTE'] + ")"
 
-        # --- REQUERIMIENTO DEL CLIENTE: SUMA NO VIGENTES ---
-        # Filtramos Estatus = 'No Vigente' y Almacén distinto de 'Falso'
+        # SUMA NO VIGENTES
         mascara_estatus = df_cruce['Estatus_Act'].astype(str).str.strip().str.upper() == 'NO VIGENTE'
         mascara_almacen = df_cruce['Almacén_Act'].astype(str).str.strip().str.upper() != 'FALSO'
-
         total_no_vigente = int(df_cruce[mascara_estatus & mascara_almacen]['Libre utilización_Act'].sum())
 
         # Filtro principal de alertas
@@ -98,7 +104,6 @@ if archivo_anterior and archivo_actual:
         if not df_cruce.empty:
             st.divider()
 
-            # --- PESTAÑAS DE NAVEGACIÓN ---
             tab1, tab2 = st.tabs(["📊 Dashboard Visual", "🔍 Reportes Especiales y Descargas"])
 
             with tab1:
@@ -106,7 +111,6 @@ if archivo_anterior and archivo_actual:
                 st.info(
                     "💡 **Tip para PDF:** Presiona `Ctrl + P` y selecciona 'Guardar como PDF' para imprimir esta pantalla.")
 
-                # --- MÉTRICAS SUPERIORES ---
                 unidades_nuevas = int(sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Unidades'].sum())
                 valor_nuevo_ingresado = sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Valor'].sum()
 
@@ -114,7 +118,6 @@ if archivo_anterior and archivo_actual:
                 m1.metric("🔴 Materiales con Aumento", len(sobre_stock[sobre_stock['Variacion_Unidades'] > 0]))
                 m2.metric("📦 Unidades Ingresadas", f"{unidades_nuevas:,}".replace(",", "."))
                 m3.metric("💰 Capital Retenido", formato_moneda(valor_nuevo_ingresado))
-                # EL NUEVO INDICADOR DEL CLIENTE EN LA PANTALLA PRINCIPAL
                 m4.metric("⚠️ Total Unidades 'No Vigentes'", f"{total_no_vigente:,}".replace(",", "."))
 
                 st.write("---")
@@ -137,8 +140,7 @@ if archivo_anterior and archivo_actual:
                                      alt.Tooltip('Variacion_Unidades:Q', title='Unidades Aumentadas')]
                         )
                         text = bars.mark_text(align='left', baseline='middle', dx=5, fontWeight='bold').encode(
-                            text=alt.Text('Texto_Etiqueta:N')
-                        )
+                            text=alt.Text('Texto_Etiqueta:N'))
                         st.altair_chart((bars + text).properties(height=350), use_container_width=True)
 
                 with grafico_der:
@@ -156,18 +158,18 @@ if archivo_anterior and archivo_actual:
                                      alt.Tooltip('Libre utilización_Act:Q', title='Stock Actual')]
                         )
                         text_vol = bars_vol.mark_text(align='left', baseline='middle', dx=5, fontWeight='bold').encode(
-                            text=alt.Text('Texto_Etiqueta:N')
-                        )
+                            text=alt.Text('Texto_Etiqueta:N'))
                         st.altair_chart((bars_vol + text_vol).properties(height=350), use_container_width=True)
 
             with tab2:
-                # --- NUEVA SECCIÓN: REPORTE DE AUMENTOS PARA EL CLIENTE ---
+                # --- REPORTE DE AUMENTOS PARA EL CLIENTE ---
                 st.subheader("📈 Reporte de Aumentos de Inventario")
-                st.write("Detalle de todos los materiales que incrementaron su stock respecto a la semana anterior.")
 
                 solo_aumentos = df_cruce[df_cruce['Variacion_Unidades'] > 0].sort_values(by='Variacion_Unidades',
                                                                                          ascending=False)
-                columnas_aumentos = ['Material', 'Almacén_Act', 'LOTE', 'Texto breve de material',
+
+                # INCLUYENDO LA NUEVA COLUMNA EN EL REPORTE
+                columnas_aumentos = ['Material', 'Estado Material', 'Almacén_Act', 'LOTE', 'Texto breve de material',
                                      'Libre utilización_Ant', 'Libre utilización_Act', 'Variacion_Unidades',
                                      '% Aumento']
 
@@ -184,7 +186,7 @@ if archivo_anterior and archivo_actual:
 
                 st.divider()
 
-                # --- SECCIÓN ORIGINAL: PLAN DE ACCIÓN ---
+                # --- PLAN DE ACCIÓN ---
                 st.subheader("📋 Detalle General y Plan de Acción")
 
                 if not sobre_stock.empty:
@@ -211,9 +213,8 @@ if archivo_anterior and archivo_actual:
                     with f1:
                         busqueda = st.text_input("🔍 Buscar por Código, Nombre o Lote:")
                     with f2:
-                        opciones_alerta = sobre_stock['Recomendación'].unique()
-                        filtro_alerta = st.multiselect("⚙️ Filtrar por tipo de Recomendación:", options=opciones_alerta,
-                                                       default=[])
+                        filtro_alerta = st.multiselect("⚙️ Filtrar por tipo de Recomendación:",
+                                                       options=sobre_stock['Recomendación'].unique(), default=[])
 
                     df_filtrado = sobre_stock.copy()
                     if busqueda:
@@ -226,7 +227,8 @@ if archivo_anterior and archivo_actual:
                     if filtro_alerta:
                         df_filtrado = df_filtrado[df_filtrado['Recomendación'].isin(filtro_alerta)]
 
-                    columnas_plan = ['Material', 'Almacén_Act', 'LOTE', 'Texto breve de material',
+                    # INCLUYENDO LA NUEVA COLUMNA EN EL PLAN DE ACCIÓN
+                    columnas_plan = ['Material', 'Estado Material', 'Almacén_Act', 'LOTE', 'Texto breve de material',
                                      'Libre utilización_Act', 'Variacion_Unidades', 'Valor libre util._Act',
                                      'Recomendación']
 
@@ -241,19 +243,20 @@ if archivo_anterior and archivo_actual:
                         }
                     )
 
-                    # --- DESCARGA EXCEL CON LAS 3 PESTAÑAS (INCLUIDO EL REPORTE DEL CLIENTE) ---
+                    # --- DESCARGA EXCEL ORDENADO ALFABÉTICAMENTE ---
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        # Pestaña 1: El nuevo reporte del cliente (Aumentos)
-                        solo_aumentos[columnas_aumentos].to_excel(writer, index=False,
-                                                                  sheet_name='Aumentos vs Semana Anterior')
-                        # Pestaña 2: Plan de acción filtrado
-                        df_filtrado[columnas_plan].to_excel(writer, index=False, sheet_name='Plan de Acción Filtrado')
-                        # Pestaña 3: Inventario total
-                        df_cruce.sort_values(by='Libre utilización_Act', ascending=False).to_excel(writer, index=False,
-                                                                                                   sheet_name='Inventario Total Histórico')
+                        # 1. ORDENAMOS TODO POR 'Material' (DE LA A a la Z) ANTES DE GUARDAR EN EXCEL
+                        excel_aumentos = solo_aumentos[columnas_aumentos].sort_values(by='Material', ascending=True)
+                        excel_plan = df_filtrado[columnas_plan].sort_values(by='Material', ascending=True)
+                        excel_total = df_cruce.sort_values(by='Material', ascending=True)
 
-                        # Auto-ajuste de columnas
+                        # 2. Guardamos las pestañas
+                        excel_aumentos.to_excel(writer, index=False, sheet_name='Aumentos vs Semana Anterior')
+                        excel_plan.to_excel(writer, index=False, sheet_name='Plan de Acción Filtrado')
+                        excel_total.to_excel(writer, index=False, sheet_name='Inventario Total Histórico')
+
+                        # 3. Auto-ajuste de columnas para que se lea perfecto
                         for sheet_name in writer.sheets:
                             worksheet = writer.sheets[sheet_name]
                             for col in worksheet.columns:
@@ -269,7 +272,7 @@ if archivo_anterior and archivo_actual:
 
                     st.write("")
                     st.download_button(
-                        label="📥 Descargar Reporte Completo (Excel auto-formateado)",
+                        label="📥 Descargar Reporte Completo (Excel Alfabético Auto-formateado)",
                         data=output.getvalue(),
                         file_name="Reporte_Inventario_Actualizado.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
