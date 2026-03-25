@@ -14,10 +14,9 @@ st.write("Sube los reportes semanales completos en Excel para detectar oportunid
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.warning("La conexión a la base de datos no está configurada aún. Puedes usar el cruce semanal normalmente.")
+    st.warning("La conexión a la base de datos no está configurada aún.")
     conn = None
 
-# --- ZONAS DE CARGA ---
 col1, col2 = st.columns(2)
 with col1:
     archivo_anterior = st.file_uploader("Sube el Excel de la semana ANTERIOR", type=['csv', 'xlsx', 'xls'])
@@ -55,23 +54,27 @@ if archivo_anterior and archivo_actual:
         df_ant.columns = df_ant.columns.str.strip()
         df_act.columns = df_act.columns.str.strip()
 
-        # --- CÁLCULOS EXACTOS DEL CLIENTE (Directo del archivo actual para evitar duplicidades del cruce) ---
-        # 1. Limpiamos y aseguramos que los números sean números
+        # --- CÁLCULOS EXACTOS PARA EL DASHBOARD (Imitando la Tabla Dinámica) ---
         df_act['Almacén'] = df_act['Almacén'].fillna('')
         df_act['Estatus'] = df_act['Estatus'].fillna('')
         df_act['Libre utilización'] = pd.to_numeric(df_act['Libre utilización'], errors='coerce').fillna(0)
         df_act['Valor libre util.'] = pd.to_numeric(df_act['Valor libre util.'], errors='coerce').fillna(0)
 
-        # 2. Máscara ultra-segura para descartar falsos, errores y vacíos
-        excluir_almacenes = ['FALSO', 'FALSE', '0', 'NAN', '', '#N/A']
-        m_almacen_act = ~df_act['Almacén'].astype(str).str.strip().str.upper().isin(excluir_almacenes)
+        # FILTROS ESTRICTOS:
+        # 1. Estatus debe ser exactamente NO VIGENTE
         m_estatus_act = df_act['Estatus'].astype(str).str.strip().str.upper() == 'NO VIGENTE'
 
-        # 3. Cálculo puro para el Dashboard
-        total_no_vigente = int(df_act[m_estatus_act & m_almacen_act]['Libre utilización'].sum())
-        valor_no_vigente = df_act[m_estatus_act & m_almacen_act]['Valor libre util.'].sum()
+        # 2. Almacén NO debe ser Falso, False, #N/A, ni estar Vacío (en blanco)
+        valores_a_excluir = ['FALSO', 'FALSE', '#N/A', 'NAN', '']
+        m_almacen_act = ~df_act['Almacén'].astype(str).str.strip().str.upper().isin(valores_a_excluir)
 
-        # --- PREPARACIÓN DEL CRUCE (Para la tabla de aumentos y descargas) ---
+        # Aplicamos los filtros a la Planilla base
+        df_kpi_no_vigente = df_act[m_estatus_act & m_almacen_act]
+
+        total_no_vigente = int(df_kpi_no_vigente['Libre utilización'].sum())
+        valor_no_vigente = df_kpi_no_vigente['Valor libre util.'].sum()
+
+        # --- PREPARACIÓN DEL CRUCE HISTÓRICO ---
         columnas_clave = ['Material', 'LOTE', 'Texto breve de material', 'Libre utilización', 'Valor libre util.',
                           'Almacén', 'Estatus']
         for col in columnas_clave:
@@ -114,13 +117,10 @@ if archivo_anterior and archivo_actual:
 
         if not df_cruce.empty:
             st.divider()
-
             tab1, tab2, tab3 = st.tabs(["📊 Dashboard Visual", "🔍 Reportes y Descargas", "☁️ Trazabilidad Histórica"])
 
             with tab1:
                 st.header("Dashboard Ejecutivo de Inventario")
-                st.info(
-                    "💡 **Tip para PDF:** Presiona `Ctrl + P` y selecciona 'Guardar como PDF' para imprimir esta pantalla.")
 
                 unidades_nuevas = int(sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Unidades'].sum())
                 valor_nuevo_ingresado = sobre_stock[sobre_stock['Variacion_Unidades'] > 0]['Variacion_Valor'].sum()
@@ -135,41 +135,41 @@ if archivo_anterior and archivo_actual:
 
                 grafico_izq, grafico_der = st.columns(2)
                 with grafico_izq:
-                    st.write("**📈 Top 10: Mayor Aumento en la Semana (Ingresos)**")
                     top_aumentos = sobre_stock[sobre_stock['Variacion_Unidades'] > 0].sort_values(
                         by='Variacion_Unidades', ascending=False).head(10).copy()
                     if not top_aumentos.empty:
                         top_aumentos['Texto_Etiqueta'] = top_aumentos['Variacion_Unidades'].apply(
                             lambda x: f"+{int(x):,}".replace(',', '.'))
-                        bars = alt.Chart(top_aumentos).mark_bar(color='#E15A97').encode(
-                            x=alt.X('Variacion_Unidades:Q', title='Unidades Aumentadas'),
-                            y=alt.Y('Nombre_Grafico:N', sort='-x', title='', axis=alt.Axis(labelLimit=800)),
-                            tooltip=[alt.Tooltip('Texto breve de material:N', title='Material'),
-                                     alt.Tooltip('LOTE:N', title='Lote'),
-                                     alt.Tooltip('Variacion_Unidades:Q', title='Unidades Aumentadas')]
-                        )
+                        bars = alt.Chart(top_aumentos).mark_bar(color='#E15A97').encode(x=alt.X('Variacion_Unidades:Q'),
+                                                                                        y=alt.Y('Nombre_Grafico:N',
+                                                                                                sort='-x',
+                                                                                                axis=alt.Axis(
+                                                                                                    labelLimit=800)))
                         text = bars.mark_text(align='left', baseline='middle', dx=5, fontWeight='bold').encode(
                             text=alt.Text('Texto_Etiqueta:N'))
                         st.altair_chart((bars + text).properties(height=350), use_container_width=True)
 
                 with grafico_der:
-                    st.write("**📦 Top 10: Mayor Volumen Actual en Bodega**")
                     top_volumen = df_cruce.sort_values(by='Libre utilización_Act', ascending=False).head(10).copy()
                     if not top_volumen.empty:
                         top_volumen['Texto_Etiqueta'] = top_volumen['Libre utilización_Act'].apply(
                             lambda x: f"{int(x):,}".replace(',', '.'))
                         bars_vol = alt.Chart(top_volumen).mark_bar(color='#4A90E2').encode(
-                            x=alt.X('Libre utilización_Act:Q', title='Stock Total Actual'),
-                            y=alt.Y('Nombre_Grafico:N', sort='-x', title='', axis=alt.Axis(labelLimit=800)),
-                            tooltip=[alt.Tooltip('Texto breve de material:N', title='Material'),
-                                     alt.Tooltip('LOTE:N', title='Lote'),
-                                     alt.Tooltip('Libre utilización_Act:Q', title='Stock Actual')]
-                        )
+                            x=alt.X('Libre utilización_Act:Q'),
+                            y=alt.Y('Nombre_Grafico:N', sort='-x', axis=alt.Axis(labelLimit=800)))
                         text_vol = bars_vol.mark_text(align='left', baseline='middle', dx=5, fontWeight='bold').encode(
                             text=alt.Text('Texto_Etiqueta:N'))
                         st.altair_chart((bars_vol + text_vol).properties(height=350), use_container_width=True)
 
             with tab2:
+                # --- HERRAMIENTA DE AUDITORÍA (NUEVO) ---
+                st.subheader("🕵️‍♂️ Auditoría de KPI: ¿Qué se sumó?")
+                with st.expander("Ver lista de materiales sumados en el Capital 'No Vigente'"):
+                    st.write(f"Total filas contabilizadas: {len(df_kpi_no_vigente)}")
+                    st.write("Filtros aplicados: Estatus='NO VIGENTE' | Almacén no es 'FALSO' ni está en blanco.")
+                    st.dataframe(df_kpi_no_vigente[['Material', 'Almacén', 'Estatus', 'Valor libre util.']])
+
+                st.write("---")
                 st.subheader("📈 Reporte de Aumentos de Inventario")
                 solo_aumentos = df_cruce[df_cruce['Variacion_Unidades'] > 0].sort_values(by='Variacion_Unidades',
                                                                                          ascending=False)
@@ -177,14 +177,11 @@ if archivo_anterior and archivo_actual:
                                      'Libre utilización_Ant', 'Libre utilización_Act', 'Variacion_Unidades',
                                      '% Aumento']
 
-                st.dataframe(
-                    solo_aumentos[columnas_aumentos], use_container_width=True,
-                    column_config={
-                        "Libre utilización_Ant": st.column_config.NumberColumn("Semana Anterior", format="%d"),
-                        "Libre utilización_Act": st.column_config.NumberColumn("Semana Actual", format="%d"),
-                        "Variacion_Unidades": st.column_config.NumberColumn("Diferencia (+)", format="%d"),
-                        "Almacén_Act": "Almacén Actual"}
-                )
+                st.dataframe(solo_aumentos[columnas_aumentos], use_container_width=True, column_config={
+                    "Libre utilización_Ant": st.column_config.NumberColumn("Semana Anterior", format="%d"),
+                    "Libre utilización_Act": st.column_config.NumberColumn("Semana Actual", format="%d"),
+                    "Variacion_Unidades": st.column_config.NumberColumn("Diferencia (+)", format="%d"),
+                    "Almacén_Act": "Almacén Actual"})
 
                 st.divider()
                 st.subheader("📋 Detalle General y Plan de Acción")
@@ -208,38 +205,19 @@ if archivo_anterior and archivo_actual:
 
                     sobre_stock['Recomendación'] = sobre_stock.apply(generar_recomendacion, axis=1)
 
-                    f1, f2 = st.columns(2)
-                    with f1:
-                        busqueda = st.text_input("🔍 Buscar por Código, Nombre o Lote:")
-                    with f2:
-                        filtro_alerta = st.multiselect("⚙️ Filtrar por tipo de Recomendación:",
-                                                       options=sobre_stock['Recomendación'].unique(), default=[])
-
-                    df_filtrado = sobre_stock.copy()
-                    if busqueda:
-                        busqueda = busqueda.lower()
-                        mask = df_filtrado['Texto breve de material'].str.lower().str.contains(busqueda, na=False) | \
-                               df_filtrado['Material'].str.lower().str.contains(busqueda, na=False) | df_filtrado[
-                                   'LOTE'].str.lower().str.contains(busqueda, na=False)
-                        df_filtrado = df_filtrado[mask]
-                    if filtro_alerta: df_filtrado = df_filtrado[df_filtrado['Recomendación'].isin(filtro_alerta)]
-
                     columnas_plan = ['Material', 'Estado Material', 'Almacén_Act', 'LOTE', 'Texto breve de material',
                                      'Libre utilización_Act', 'Variacion_Unidades', 'Valor libre util._Act',
                                      'Recomendación']
-                    st.dataframe(
-                        df_filtrado[columnas_plan], use_container_width=True,
-                        column_config={
-                            "Valor libre util._Act": st.column_config.NumberColumn("Valor Actual ($)", format="$ %d"),
-                            "Libre utilización_Act": st.column_config.NumberColumn("Stock Actual", format="%d"),
-                            "Variacion_Unidades": st.column_config.NumberColumn("Variación (Unid.)", format="%d"),
-                            "Almacén_Act": "Almacén Actual"}
-                    )
+                    st.dataframe(sobre_stock[columnas_plan], use_container_width=True, column_config={
+                        "Valor libre util._Act": st.column_config.NumberColumn("Valor Actual ($)", format="$ %d"),
+                        "Libre utilización_Act": st.column_config.NumberColumn("Stock Actual", format="%d"),
+                        "Variacion_Unidades": st.column_config.NumberColumn("Variación (Unid.)", format="%d"),
+                        "Almacén_Act": "Almacén Actual"})
 
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         excel_aumentos = solo_aumentos[columnas_aumentos].sort_values(by='Material', ascending=True)
-                        excel_plan = df_filtrado[columnas_plan].sort_values(by='Material', ascending=True)
+                        excel_plan = sobre_stock[columnas_plan].sort_values(by='Material', ascending=True)
                         excel_total = df_cruce.sort_values(by='Material', ascending=True)
 
                         excel_aumentos.to_excel(writer, index=False, sheet_name='Aumentos vs Semana Anterior')
@@ -265,26 +243,23 @@ if archivo_anterior and archivo_actual:
                 else:
                     st.success("No hay alertas de inventario esta semana.")
 
-            # --- PESTAÑA 3: TRAZABILIDAD GOOGLE SHEETS ---
             with tab3:
                 st.header("Base de Datos Histórica (Google Sheets)")
-                st.write("Guarda la foto de esta semana directamente en tu nube permanente para evaluar tendencias.")
-
                 if conn is not None:
                     with st.form("form_guardar_bd"):
                         col_fecha, col_btn = st.columns([1, 2])
                         with col_fecha:
                             fecha_registro = st.date_input("Fecha de esta foto de inventario:", date.today())
                         with col_btn:
-                            st.write("")
+                            st.write("");
                             st.write("")
                             guardar = st.form_submit_button("💾 Enviar 'Semana Actual' a Google Sheets")
 
                         if guardar:
                             with st.spinner("Conectando con Google Sheets..."):
                                 try:
-                                    df_hist = conn.read(worksheet="Historial", usecols=list(range(6)), ttl=0)
-                                    df_hist = df_hist.dropna(how="all")
+                                    df_hist = conn.read(worksheet="Historial", usecols=list(range(6)), ttl=0).dropna(
+                                        how="all")
                                 except Exception:
                                     df_hist = pd.DataFrame(columns=['Fecha_Registro', 'Material', 'LOTE', 'Texto_breve',
                                                                     'Libre_utilizacion', 'Valor'])
@@ -302,39 +277,28 @@ if archivo_anterior and archivo_actual:
 
                                 df_updated = pd.concat([df_hist, df_para_bd], ignore_index=True)
                                 conn.update(worksheet="Historial", data=df_updated)
-                                st.success(f"¡Inventario del {fecha_registro} guardado exitosamente en Google Sheets!")
+                                st.success(f"¡Inventario del {fecha_registro} guardado exitosamente!")
 
                     st.divider()
                     st.subheader("📈 Análisis de Tendencias")
                     if st.button("🔄 Cargar Gráficos Históricos"):
                         with st.spinner("Descargando historial desde Google..."):
-                            try:
-                                df_hist_cloud = conn.read(worksheet="Historial", usecols=list(range(6)), ttl=0).dropna(
-                                    how="all")
-                                if not df_hist_cloud.empty:
-                                    df_hist_cloud['Fecha_Registro'] = pd.to_datetime(df_hist_cloud['Fecha_Registro'])
-                                    materiales_disponibles = df_hist_cloud['Texto_breve'].unique()
-                                    material_seleccionado = st.selectbox(
-                                        "Selecciona un material para ver su evolución:", materiales_disponibles)
-
-                                    datos_grafico = df_hist_cloud[
-                                        df_hist_cloud['Texto_breve'] == material_seleccionado].copy()
-
-                                    if not datos_grafico.empty:
-                                        linea = alt.Chart(datos_grafico).mark_line(point=True, color='#FF5722',
-                                                                                   strokeWidth=3).encode(
-                                            x=alt.X('Fecha_Registro:T', title='Fecha'),
-                                            y=alt.Y('Libre_utilizacion:Q', title='Stock Total (Unidades)'),
-                                            color=alt.Color('LOTE:N', legend=alt.Legend(title="Lotes")),
-                                            tooltip=['Fecha_Registro', 'LOTE', 'Libre_utilizacion']
-                                        ).properties(height=400)
-                                        st.altair_chart(linea, use_container_width=True)
-                                else:
-                                    st.info("Aún no has guardado ningún dato en tu Google Sheet.")
-                            except Exception as e:
-                                st.error(f"Error al leer la base de datos: {e}")
-                else:
-                    st.warning("Configura los 'Secrets' en Streamlit Cloud para habilitar este módulo.")
-
+                            df_hist_cloud = conn.read(worksheet="Historial", usecols=list(range(6)), ttl=0).dropna(
+                                how="all")
+                            if not df_hist_cloud.empty:
+                                df_hist_cloud['Fecha_Registro'] = pd.to_datetime(df_hist_cloud['Fecha_Registro'])
+                                material_seleccionado = st.selectbox("Selecciona un material:",
+                                                                     df_hist_cloud['Texto_breve'].unique())
+                                datos_grafico = df_hist_cloud[
+                                    df_hist_cloud['Texto_breve'] == material_seleccionado].copy()
+                                if not datos_grafico.empty:
+                                    linea = alt.Chart(datos_grafico).mark_line(point=True, color='#FF5722',
+                                                                               strokeWidth=3).encode(
+                                        x=alt.X('Fecha_Registro:T', title='Fecha'),
+                                        y=alt.Y('Libre_utilizacion:Q', title='Stock Total (Unidades)'),
+                                        color=alt.Color('LOTE:N', legend=alt.Legend(title="Lotes")))
+                                    st.altair_chart(linea.properties(height=400), use_container_width=True)
+                            else:
+                                st.info("Aún no has guardado ningún dato.")
     except Exception as e:
         st.error(f"Error procesando los datos: {e}")
