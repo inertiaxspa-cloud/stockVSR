@@ -178,6 +178,28 @@ if archivo_anterior and archivo_actual:
             if almacenes_invalidos_act.sum() > 0:
                 st.warning(f"⚠️ {almacenes_invalidos_act.sum()} registros con Almacén inválido (False/FALSO)")
 
+    # ── Detectar y consolidar duplicados en archivos originales ─────────────
+    for label, df_check in [("semana anterior", df_ant), ("semana actual", df_act)]:
+        dupes = df_check.duplicated(subset=['Material', 'LOTE', 'Texto breve de material'], keep=False) \
+            if all(c in df_check.columns for c in ['Material', 'LOTE', 'Texto breve de material']) else pd.Series([False])
+        if dupes.sum() > 0:
+            st.warning(
+                f"⚠️ Se encontraron **{dupes.sum()} filas duplicadas** (mismo Material + LOTE) "
+                f"en el archivo de **{label}**. Se consolidarán sumando su stock."
+            )
+    # Consolidar duplicados sumando numéricos, tomando primer valor para texto
+    def consolidar_duplicados(df):
+        if not all(c in df.columns for c in ['Material', 'LOTE', 'Texto breve de material']):
+            return df
+        cols_numericas = df.select_dtypes(include='number').columns.tolist()
+        cols_texto = [c for c in df.columns if c not in cols_numericas]
+        agg = {c: 'sum' for c in cols_numericas}
+        agg.update({c: 'first' for c in cols_texto if c not in ['Material', 'LOTE', 'Texto breve de material']})
+        return df.groupby(['Material', 'LOTE', 'Texto breve de material'], as_index=False).agg(agg)
+
+    df_ant = consolidar_duplicados(df_ant)
+    df_act = consolidar_duplicados(df_act)
+
     # ── PASO 2: Validar columnas requeridas ───────────────────────────────────
     COLS_REQUERIDAS = ['Material', 'LOTE', 'Texto breve de material',
                        'Libre utilización', 'Valor libre util.', 'Almacén', 'Estatus']
