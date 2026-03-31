@@ -83,7 +83,15 @@ if archivo_anterior and archivo_actual:
 
         df_cruce = pd.merge(df_ant[columnas_clave], df_act[columnas_clave],
                             on=['Material', 'LOTE', 'Texto breve de material'],
-                            suffixes=('_Ant', '_Act'), how='outer').fillna(0)
+                            suffixes=('_Ant', '_Act'), how='outer')
+
+        # Rellenar columnas numéricas con 0 y columnas de texto con '' para evitar
+        # el error "unsupported operand type(s) for +: 'int' and 'str'
+        for _col in df_cruce.columns:
+            if df_cruce[_col].dtype == 'object':
+                df_cruce[_col] = df_cruce[_col].fillna('')
+            else:
+                df_cruce[_col] = df_cruce[_col].fillna(0)
 
         df_cruce['Variacion_Unidades'] = df_cruce['Libre utilización_Act'] - df_cruce['Libre utilización_Ant']
         df_cruce['Variacion_Valor'] = df_cruce['Valor libre util._Act'] - df_cruce['Valor libre util._Ant']
